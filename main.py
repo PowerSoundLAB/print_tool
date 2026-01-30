@@ -4,12 +4,14 @@ import os
 import glob
 import win32print
 import win32api
+import win32con
+import time
 
 class ModernBatchPrinter:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("Потоковая печать")
-        self.root.geometry("640x800")
+        self.root.geometry("640x850")
         self.root.configure(bg='#f5f5f5')
         
         # Устанавливаем иконку (если есть)
@@ -124,7 +126,7 @@ class ModernBatchPrinter:
                 font=('Segoe UI', 10),
                 bg='white').grid(row=1, column=0, sticky=tk.W, pady=5)
         
-        self.file_types_var = tk.StringVar(value="*.pdf, *.docx, *.doc, *.txt")
+        self.file_types_var = tk.StringVar(value="*.xls, *.doc")
         file_entry = tk.Entry(settings_grid, 
                              textvariable=self.file_types_var,
                              font=('Segoe UI', 10),
@@ -134,7 +136,7 @@ class ModernBatchPrinter:
         file_entry.grid(row=1, column=1, sticky=tk.W, padx=10, pady=5)
         
         # Двусторонняя печать
-        self.duplex_var = tk.BooleanVar(value=True)
+        self.duplex_var = tk.BooleanVar(value=False)
         duplex_check = tk.Checkbutton(settings_grid, 
                                      text="Двусторонняя печать",
                                      variable=self.duplex_var,
@@ -142,7 +144,21 @@ class ModernBatchPrinter:
                                      bg='white',
                                      activebackground='white',
                                      cursor='hand2')
-        duplex_check.grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=10)
+        duplex_check.grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=5)
+        
+        # Ориентация страницы
+        tk.Label(settings_grid, text="Ориентация:", 
+                font=('Segoe UI', 10),
+                bg='white').grid(row=3, column=0, sticky=tk.W, pady=5)
+        
+        self.orientation_var = tk.StringVar(value="Книжная")
+        orientation_combo = ttk.Combobox(settings_grid,
+                                        textvariable=self.orientation_var,
+                                        values=["Книжная", "Альбомная"],
+                                        font=('Segoe UI', 10),
+                                        state='readonly',
+                                        width=20)
+        orientation_combo.grid(row=3, column=1, sticky=tk.W, padx=10, pady=5)
         
         # Большая кнопка печати
         print_btn = tk.Button(main_frame, 
@@ -213,31 +229,94 @@ class ModernBatchPrinter:
             return
         
         self.status_bar.config(text="Идет печать...")
+        self.root.update()  # Обновляем интерфейс
         
         file_patterns = [pattern.strip() for pattern in self.file_types_var.get().split(",")]
         total_files = 0
+        
+        # Получаем имя принтера
+        printer_name = self.printer_var.get()
+        if not printer_name:
+            messagebox.showerror("Ошибка", "Не выбран принтер")
+            return
+        
+        # Получаем настройки
+        duplex = self.duplex_var.get()
+        orientation = self.orientation_var.get()
+        
+        # Настройка принтера один раз перед печатью всех файлов
+        try:
+            self.configure_printer(printer_name, duplex, orientation)
+        except Exception as e:
+            messagebox.showwarning("Внимание", f"Не удалось применить настройки принтера:\n{str(e)}\nПродолжаем печать с настройками по умолчанию.")
         
         for folder in self.folders:
             for pattern in file_patterns:
                 files = glob.glob(os.path.join(folder, pattern))
                 for file_path in files:
                     try:
+                        # Отправляем файл на печать
                         win32api.ShellExecute(
                             0,
-                            "print",
+                            "printto",
                             file_path,
-                            f'/d:"{self.printer_var.get()}"',
+                            f'"{printer_name}"',
                             ".",
                             0
                         )
+                        
                         total_files += 1
-                        self.status_bar.config(text=f"Отправлено на печать: {file_path}")
+                        file_name = os.path.basename(file_path)
+                        self.status_bar.config(text=f"Отправлено на печать: {file_name}")
                         self.root.update()  # Обновляем интерфейс
+                        
+                        # Небольшая задержка между файлами
+                        time.sleep(1)
+                        
                     except Exception as e:
                         print(f"Ошибка: {file_path} - {e}")
+                        messagebox.showerror("Ошибка печати", f"Файл: {os.path.basename(file_path)}\nОшибка: {str(e)}")
         
         messagebox.showinfo("Готово", f"Отправлено {total_files} файлов на печать")
         self.status_bar.config(text=f"Готово. Отправлено {total_files} файлов")
+    
+    def configure_printer(self, printer_name, duplex, orientation):
+        """
+        Настраивает параметры принтера перед печатью
+        """
+        try:
+            # Открываем принтер
+            printer_handle = win32print.OpenPrinter(printer_name)
+            
+            # Получаем текущие настройки принтера
+            defaults = win32print.GetPrinter(printer_handle, 2)
+            devmode = defaults["pDevMode"]
+            
+            # Настройка двусторонней печати
+            if duplex:
+                # 1 = горизонтальная двусторонняя, 2 = вертикальная двусторонняя
+                devmode.Duplex = 2  # Вертикальная двусторонняя печать
+            else:
+                devmode.Duplex = 1  # Односторонняя печать
+            
+            # Настройка ориентации
+            if orientation == "Альбомная":
+                devmode.Orientation = win32con.DMORIENT_LANDSCAPE  # Альбомная
+            else:
+                devmode.Orientation = win32con.DMORIENT_PORTRAIT   # Книжная
+            
+            # Сохраняем изменения
+            defaults["pDevMode"] = devmode
+            win32print.SetPrinter(printer_handle, 2, defaults, 0)
+            
+            # Закрываем принтер
+            win32print.ClosePrinter(printer_handle)
+            
+            print(f"Принтер настроен: Двусторонняя={duplex}, Ориентация={orientation}")
+            
+        except Exception as e:
+            print(f"Ошибка настройки принтера: {e}")
+            raise
     
     def run(self):
         self.root.mainloop()
